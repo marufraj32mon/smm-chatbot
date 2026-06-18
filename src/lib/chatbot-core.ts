@@ -1,10 +1,16 @@
 /**
- * Chatbot core — Google Gemini LLM + MothersSMM function calling.
+ * Chatbot core — Groq LLM (Llama 3.3 70B) + MothersSMM function calling.
+ *
+ * Why Groq?
+ *   - 14,400 free requests/day (vs Gemini's 1,500)
+ *   - Ultra-fast (~0.5s response time)
+ *   - No region restrictions (works globally, incl. Bangladesh)
+ *   - Free forever, no credit card required
  *
  * Flow:
  *  1. Maintain conversation context per session.
- *  2. Gemini is given a system instruction + tool catalog.
- *  3. Gemini can call tools (list orders, get order, list payments, list tickets,
+ *  2. Groq (OpenAI-compatible API) is given a system prompt + tool catalog.
+ *  3. The LLM can call tools (list orders, get order, list payments, list tickets,
  *     list users, etc.). We execute them and feed results back.
  *  4. The final assistant message is returned as the bot reply.
  *
@@ -14,7 +20,7 @@
  *  - { type: "error", message }
  */
 
-import { getGemini } from './gemini-init';
+import { getGroq, GROQ_MODEL } from './groq-init';
 import type { SmmConfig } from './smm-api';
 import * as smm from './smm-api';
 
@@ -30,84 +36,101 @@ export interface ChatResult {
   steps:       ChatStep[];
 }
 
-// ─── Tool catalog (Gemini's functionDeclarations format) ──────────────
+// ─── Tool catalog (OpenAI-compatible format, which Groq uses) ─────────
 const TOOLS = [
   {
-    functionDeclarations: [
-      {
-        name: 'list_orders',
-        description: 'List recent orders from the SMM panel. Use when the user asks about "my orders", "recent orders", "pending orders", or wants to check order history.',
-        parameters: {
-          type: 'object',
-          properties: {
-            limit:  { type: 'integer', description: 'Max orders to return (default 10, max 100)' },
-            offset: { type: 'integer', description: 'Pagination offset' },
-            status: { type: 'string',  description: 'Filter by status: Pending | Processing | In progress | Completed | Partial | Canceled | Refunded' },
-          },
+    type: 'function',
+    function: {
+      name: 'list_orders',
+      description: 'List recent orders from the SMM panel. Use when the user asks about "my orders", "recent orders", "pending orders", or wants to check order history.',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit:  { type: 'integer', description: 'Max orders to return (default 10, max 100)' },
+          offset: { type: 'integer', description: 'Pagination offset' },
+          status: { type: 'string',  description: 'Filter by status: Pending | Processing | In progress | Completed | Partial | Canceled | Refunded' },
         },
       },
-      {
-        name: 'get_order',
-        description: 'Get details of a specific order by ID. Use when the user asks about a specific order number.',
-        parameters: {
-          type: 'object',
-          properties: { order_id: { type: 'string', description: 'Order ID' } },
-          required: ['order_id'],
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_order',
+      description: 'Get details of a specific order by ID. Use when the user asks about a specific order number.',
+      parameters: {
+        type: 'object',
+        properties: { order_id: { type: 'string', description: 'Order ID' } },
+        required: ['order_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_payments',
+      description: 'List recent payment transactions. Use when user asks about payments, deposits, or transaction history.',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit:  { type: 'integer' },
+          offset: { type: 'integer' },
         },
       },
-      {
-        name: 'list_payments',
-        description: 'List recent payment transactions. Use when user asks about payments, deposits, or transaction history.',
-        parameters: {
-          type: 'object',
-          properties: {
-            limit:  { type: 'integer' },
-            offset: { type: 'integer' },
-          },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_users',
+      description: 'List registered users on the SMM panel. Useful for admin-level questions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit:  { type: 'integer' },
+          offset: { type: 'integer' },
         },
       },
-      {
-        name: 'list_users',
-        description: 'List registered users on the SMM panel. Useful for admin-level questions.',
-        parameters: {
-          type: 'object',
-          properties: {
-            limit:  { type: 'integer' },
-            offset: { type: 'integer' },
-          },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_tickets',
+      description: 'List support tickets. Use when user asks about support tickets, complaints, or open issues.',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit:  { type: 'integer' },
+          offset: { type: 'integer' },
+          status: { type: 'string', description: 'Open | Answered | Closed' },
         },
       },
-      {
-        name: 'list_tickets',
-        description: 'List support tickets. Use when user asks about support tickets, complaints, or open issues.',
-        parameters: {
-          type: 'object',
-          properties: {
-            limit:  { type: 'integer' },
-            offset: { type: 'integer' },
-            status: { type: 'string', description: 'Open | Answered | Closed' },
-          },
-        },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_ticket',
+      description: 'Get a specific ticket by ID, including message thread.',
+      parameters: {
+        type: 'object',
+        properties: { ticket_id: { type: 'string' } },
+        required: ['ticket_id'],
       },
-      {
-        name: 'get_ticket',
-        description: 'Get a specific ticket by ID, including message thread.',
-        parameters: {
-          type: 'object',
-          properties: { ticket_id: { type: 'string' } },
-          required: ['ticket_id'],
-        },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'request_cancel_order',
+      description: 'Request cancellation of an order. Only call this if the user explicitly asks to cancel an order and provides an order ID.',
+      parameters: {
+        type: 'object',
+        properties: { order_id: { type: 'string' } },
+        required: ['order_id'],
       },
-      {
-        name: 'request_cancel_order',
-        description: 'Request cancellation of an order. Only call this if the user explicitly asks to cancel an order and provides an order ID.',
-        parameters: {
-          type: 'object',
-          properties: { order_id: { type: 'string' } },
-          required: ['order_id'],
-        },
-      },
-    ],
+    },
   },
 ];
 
@@ -140,7 +163,6 @@ async function executeTool(name: string, args: any, cfg: SmmConfig): Promise<str
       result = { ok: false, error: `Unknown tool: ${name}` };
   }
 
-  // Truncate huge responses to keep token usage reasonable
   const json = JSON.stringify(result);
   if (json.length > 6000) {
     return json.slice(0, 6000) + '\n...[truncated]';
@@ -148,7 +170,7 @@ async function executeTool(name: string, args: any, cfg: SmmConfig): Promise<str
   return json;
 }
 
-// ─── Default system instruction (matches the screenshot's tone) ────────
+// ─── Default system prompt ─────────────────────────────────────────────
 function buildSystemPrompt(opts: {
   botName:          string;
   panelName:        string;
@@ -198,7 +220,7 @@ export interface ChatOptions {
   panelName:          string;
   panelDomain:        string;
   systemPromptExtra:  string;
-  history:            { role: 'user' | 'model'; content: string }[];
+  history:            { role: 'user' | 'assistant'; content: string }[];
   userMessage:        string;
   onStep?:            (step: ChatStep) => void;
 }
@@ -211,17 +233,17 @@ export async function runChat(opts: ChatOptions): Promise<ChatResult> {
     opts.onStep?.(s);
   };
 
-  const { model } = getGemini();
+  const client = getGroq();
   const systemPrompt = buildSystemPrompt(opts);
 
   pushStep('🤖 Understanding your question...', 'done');
   pushStep('🔍 Looking up data from the panel...');
 
-  // Build Gemini chat contents — system prompt goes in systemInstruction,
-  // history goes in contents, latest user message appended at the end.
-  const contents: any[] = [
-    ...opts.history.map(m => ({ role: m.role, parts: [{ text: m.content }] })),
-    { role: 'user', parts: [{ text: opts.userMessage }] },
+  // Build OpenAI-compatible messages array
+  const messages: any[] = [
+    { role: 'system', content: systemPrompt },
+    ...opts.history.map(m => ({ role: m.role, content: m.content })),
+    { role: 'user', content: opts.userMessage },
   ];
 
   let toolCallCount = 0;
@@ -229,52 +251,52 @@ export async function runChat(opts: ChatOptions): Promise<ChatResult> {
   let finalReply = '';
 
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-    const result = await model.generateContent({
-      contents,
-      systemInstruction: systemPrompt,
+    const response = await client.chat.completions.create({
+      model: GROQ_MODEL,
+      messages,
       tools: TOOLS as any,
+      tool_choice: 'auto',
+      temperature: 0.6,
+      max_tokens: 1024,
     });
 
-    const response = result.response;
-    const candidates = response.candidates();
-    if (!candidates || candidates.length === 0) {
+    const msg = response.choices?.[0]?.message as any;
+    if (!msg) {
       finalReply = "I'm sorry, I couldn't generate a response. Please try again.";
       break;
     }
 
-    const parts = candidates[0].content.parts;
+    // Append assistant message (with potential tool_calls)
+    messages.push({
+      role: 'assistant',
+      content: msg.content || '',
+      tool_calls: msg.tool_calls,
+    });
 
-    // Collect function calls and text from this turn
-    const functionCalls = parts.filter((p: any) => p.functionCall);
-    const textParts = parts.filter((p: any) => p.text).map((p: any) => p.text);
-    const textContent = textParts.join('\n').trim();
-
-    // Append model's response to contents
-    contents.push({ role: 'model', parts });
-
-    // No function calls → this is the final answer
-    if (functionCalls.length === 0) {
-      finalReply = textContent || "I'm sorry, I couldn't generate a response.";
+    // No tool calls → final answer
+    if (!msg.tool_calls || msg.tool_calls.length === 0) {
+      finalReply = msg.content || '';
       break;
     }
 
-    // Execute each function call
-    for (const fc of functionCalls) {
+    // Execute each tool call
+    for (const call of msg.tool_calls) {
       toolCallCount++;
-      const fnName = fc.functionCall.name;
-      const fnArgs = fc.functionCall.args || {};
+      const fnName = call.function?.name;
+      let args: any = {};
+      try { args = JSON.parse(call.function?.arguments || '{}'); } catch {}
 
-      // Mark current step done, push new active step
       if (steps.length > 0) steps[steps.length - 1].status = 'done';
       pushStep(`⚙️ Calling ${fnName}...`);
 
-      const toolResult = await executeTool(fnName, fnArgs, opts.cfg);
+      const toolResult = await executeTool(fnName, args, opts.cfg);
       steps[steps.length - 1].status = 'done';
 
-      // Feed result back as a functionResponse
-      contents.push({
-        role: 'function',
-        parts: [{ functionResponse: { name: fnName, response: { result: toolResult } } }],
+      // Feed result back as tool message
+      messages.push({
+        role: 'tool',
+        content: toolResult,
+        tool_call_id: call.id,
       });
     }
   }
@@ -284,28 +306,32 @@ export async function runChat(opts: ChatOptions): Promise<ChatResult> {
   // ─── Generate follow-up suggestions ────────────────────────────────
   let suggestions: string[] = [];
   try {
-    const suggResult = await model.generateContent({
-      contents: [
-        ...contents.slice(-4),
+    const suggResp = await client.chat.completions.create({
+      model: GROQ_MODEL,
+      messages: [
         {
-          role: 'user',
-          parts: [{ text: 'Based on the conversation above, generate 3-4 short follow-up questions the user might want to ask next. Reply with ONLY a JSON array of strings, each ≤ 50 chars. Example: ["Check order status", "Show my payments"]' }],
+          role: 'system',
+          content: 'Based on the conversation, generate 3-4 short follow-up questions the user might want to ask next. Reply with ONLY a JSON array of strings, each ≤ 50 chars. Example: ["Check order status", "Show my payments"]',
         },
+        ...messages.slice(-4),
       ],
-      systemInstruction: 'You are a JSON generator. Reply with only valid JSON, no markdown fences.',
-      generationConfig: {
-        temperature: 0.8,
-        maxOutputTokens: 200,
-        responseMimeType: 'application/json',
-      },
+      temperature: 0.8,
+      max_tokens: 200,
+      response_format: { type: 'json_object' },
     });
-    const suggText = suggResult.response.text().trim();
-    // Strip any markdown fences if present
-    const cleaned = suggText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-    suggestions = JSON.parse(cleaned);
+    const suggText = suggResp.choices?.[0]?.message?.content?.trim() || '';
+    // Parse — Groq with json_object mode returns { "suggestions": [...] } or just an array
+    try {
+      const parsed = JSON.parse(suggText);
+      suggestions = Array.isArray(parsed) ? parsed : (parsed.suggestions || []);
+    } catch {
+      // If not valid JSON, try to extract array
+      const match = suggText.match(/\[[\s\S]*\]/);
+      if (match) suggestions = JSON.parse(match[0]);
+    }
     if (!Array.isArray(suggestions)) suggestions = [];
   } catch {
-    // Non-critical — fall through with empty suggestions
+    // Non-critical
   }
 
   return { reply: finalReply, suggestions, toolCalls: toolCallCount, steps };
