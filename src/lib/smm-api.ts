@@ -12,7 +12,8 @@
 
 export interface SmmConfig {
   apiBase: string;   // e.g. https://mothersmm.com/adminapi/v2
-  apiKey:  string;   // X-Api-Key value
+  apiKey:  string;   // X-Api-Key value (Admin API key — also used for user API services endpoint)
+  panelDomain?: string;  // e.g. https://mothersmm.com — derived from apiBase if not set
 }
 
 export class SmmApiError extends Error {
@@ -225,9 +226,125 @@ export const tickets = {
     smmFetch(cfg, '/tickets/add', { method: 'POST', body: JSON.stringify(body) }),
 };
 
+// ─── Services (Standard SMM Panel User API) ────────────────────────────
+//
+// Most SMM panels (Perfect Panel, SMMRaze, MothersSMM, etc.) expose a
+// universal user API at GET /api/v2?key=KEY&action=services that returns
+// the full service catalog with rates. The Admin API v2 doesn't expose
+// services — so we use the user API endpoint to fetch them.
+//
+// The apiBase in SmmConfig points to the Admin API root (e.g.
+// https://mothersmm.com/adminapi/v2). We derive the panel domain from it
+// and hit `<panelDomain>/api/v2`.
+export const services = {
+  /**
+   * List ALL services from the SMM panel.
+   *
+   * @param cfg     SmmConfig (apiBase + apiKey)
+   * @param filters Optional filters: platform (e.g. "Facebook"), category (e.g. "Followers"), limit
+   * @returns Filtered + sorted (cheapest first) services from the panel
+   */
+  list: async (
+    cfg: SmmConfig,
+    filters?: { platform?: string; category?: string; limit?: number },
+  ): Promise<{ ok: true; count: number; services: any[] } | { ok: false; error: string }> => {
+    try {
+      // Derive the panel domain from apiBase
+      // e.g. https://mothersmm.com/adminapi/v2 → https://mothersmm.com
+      let panelDomain = cfg.panelDomain || '';
+      if (!panelDomain) {
+        try {
+          const u = new URL(cfg.apiBase);
+          panelDomain = `${u.protocol}//${u.host}`;
+        } catch {
+          return { ok: false, error: 'Invalid apiBase in SmmConfig' };
+        }
+      }
+
+      // Hit the standard SMM user API endpoint
+      const url = `${panelDomain.replace(/\/+$/, '')}/api/v2?key=${encodeURIComponent(cfg.apiKey)}&action=services`;
+      const res = await fetch(url, { method: 'GET' });
+      const text = await res.text();
+      let json: any;
+      try { json = JSON.parse(text); } catch {
+        return { ok: false, error: `Panel API returned non-JSON: ${text.slice(0, 200)}` };
+      }
+
+      if (!res.ok) {
+        const errMsg = json?.error || json?.message || `Panel API ${res.status}`;
+        return { ok: false, error: errMsg };
+      }
+
+      if (!Array.isArray(json)) {
+        return { ok: false, error: 'Panel API did not return a services array' };
+      }
+
+      // Normalize each service: parse rate/min/max to numbers, extract platform+category
+      let normalized = json.map((s: any) => {
+        const rate = parseFloat(s.rate) || 0;
+        const min  = parseInt(s.min, 10)  || 0;
+        const max  = parseInt(s.max, 10)  || 0;
+
+        // The "category" field from SMM panels often looks like "Instagram" or
+        // "Social Media → Instagram → Followers". We split it to extract platform + category.
+        const categoryStr = String(s.category || '');
+        const parts = categoryStr.split(/[→\->]/).map((p: string) => p.trim()).filter(Boolean);
+        const platform = parts.length > 1 ? parts[parts.length - 2] : (parts[0] || '');
+        const category = parts.length > 1 ? parts[parts.length - 1] : '';
+
+        return {
+          service_id:  s.service,
+          name:        s.name,
+          category:    categoryStr,
+          platform:    platform,
+          serviceType: category,
+          rate,
+          ratePer1000: rate,
+          min,
+          max,
+          type:        s.type,
+          description: s.desc || s.description || '',
+          dripfeed:    Boolean(s.dripfeed),
+          refill:      Boolean(s.refill),
+          cancel:      Boolean(s.cancel),
+        };
+      });
+
+      // Apply filters
+      if (filters?.platform) {
+        const p = filters.platform.toLowerCase();
+        normalized = normalized.filter((s: any) =>
+          s.platform?.toLowerCase().includes(p) ||
+          s.category?.toLowerCase().includes(p) ||
+          s.name?.toLowerCase().includes(p),
+        );
+      }
+      if (filters?.category) {
+        const c = filters.category.toLowerCase();
+        normalized = normalized.filter((s: any) =>
+          s.serviceType?.toLowerCase().includes(c) ||
+          s.category?.toLowerCase().includes(c) ||
+          s.name?.toLowerCase().includes(c),
+        );
+      }
+
+      // Sort cheapest first
+      normalized.sort((a: any, b: any) => a.rate - b.rate);
+
+      // Apply limit
+      const limit = filters?.limit ?? 10;
+      if (limit > 0) normalized = normalized.slice(0, limit);
+
+      return { ok: true, count: normalized.length, services: normalized };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  },
+};
+
 // ─── Top-level client ──────────────────────────────────────────────────
 export function createSmmClient(cfg: SmmConfig) {
-  return { orders, cancel, refill, payments, users, tickets };
+  return { services, orders, cancel, refill, payments, users, tickets };
 }
 
 // ─── Helper: safe call that never throws — used by AI tool wrappers ───

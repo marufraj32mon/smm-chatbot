@@ -105,6 +105,7 @@ export async function POST(req: NextRequest) {
             apiBase: widget.smmApiBase,
             apiKey:  widget.smmApiKey,
           },
+          widgetId:          widget.id,
           botName:           widget.botName,
           panelName:         widget.panelName,
           panelDomain:       widget.panelDomain,

@@ -12,7 +12,8 @@
  *   GEMINI_API_KEY   your Gemini API key (starts with AIza...)
  *
  * Optional:
- *   GEMINI_MODEL     defaults to "gemini-1.5-flash" (free tier)
+ *   GEMINI_MODEL     defaults to "gemini-2.0-flash" (free tier, current)
+ *                    Other free options: "gemini-2.0-flash-lite", "gemini-2.5-flash"
  */
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
@@ -30,14 +31,17 @@ export function getGemini() {
 
   if (!cachedClient) {
     cachedClient = new GoogleGenerativeAI(apiKey);
+    // Default: gemini-2.0-flash — Google's current stable free-tier model.
+    // gemini-1.5-* models are deprecated and return 404.
+    const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
     cachedModel = cachedClient.getGenerativeModel({
-      model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+      model: modelName,
       generationConfig: {
         temperature: 0.6,
         maxOutputTokens: 1024,
       },
     });
-    console.log('[gemini] Initialized model:', process.env.GEMINI_MODEL || 'gemini-1.5-flash');
+    console.log('[gemini] Initialized model:', modelName);
   }
 
   return { client: cachedClient, model: cachedModel };

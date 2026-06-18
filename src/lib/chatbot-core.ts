@@ -43,12 +43,12 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'list_services',
-      description: 'List SMM services from the panel catalog with their prices. USE THIS when the user asks about service prices, recommendations, "best", "cheapest", or any pricing/service question (e.g. "Facebook follower price", "best TikTok likes", "Instagram views cheapest rate"). Filter by platform and/or category when relevant.',
+      description: 'List SMM services from the panel with REAL prices fetched live from the MothersSMM panel API. ALWAYS call this when the user asks about service prices, recommendations, "best", "cheapest", or any pricing/service question. Examples of when to call: "Facebook follower price", "best TikTok likes", "cheapest Instagram views", "kon service bhalo", "kom dame konta ache". Filter by platform and/or category when relevant.',
       parameters: {
         type: 'object',
         properties: {
-          platform: { type: 'string', description: 'Filter by platform: Facebook | Instagram | TikTok | YouTube | Twitter. Use this when user mentions a specific platform.' },
-          category: { type: 'string', description: 'Filter by category: Followers | Likes | Views | Comments | Subscribers | WatchTime. Use this when user mentions a specific service type.' },
+          platform: { type: 'string', description: 'Filter by platform name. Examples: Facebook, Instagram, TikTok, YouTube, Twitter. Use this when user mentions a specific platform.' },
+          category: { type: 'string', description: 'Filter by service type. Examples: Followers, Likes, Views, Comments, Subscribers. Use this when user mentions a specific service type.' },
           limit:    { type: 'integer', description: 'Max services to return (default 10, max 50)' },
         },
       },
@@ -163,11 +163,21 @@ async function executeTool(name: string, args: any, cfg: SmmConfig, widgetId: st
 
   switch (name) {
     case 'list_services': {
-      // Query the local Service catalog (no SMM API endpoint for this)
+      // Call the SMM panel's standard user API (/api/v2?action=services)
+      // to fetch live services. Falls back to local DB catalog if API fails.
       const platform = args.platform as string | undefined;
       const category = args.category as string | undefined;
       const limit = Math.min(safeInt(args.limit, 10), 50);
 
+      // 1. Try fetching live from SMM panel API
+      const live = await smm.services.list(cfg, { platform, category, limit });
+
+      if (live.ok && live.count > 0) {
+        result = live;
+        break;
+      }
+
+      // 2. Fall back to local Service catalog (if admin populated it manually)
       const where: any = { widgetId, isActive: true };
       if (platform) {
         where.platform = { contains: platform, mode: 'insensitive' };
@@ -176,9 +186,9 @@ async function executeTool(name: string, args: any, cfg: SmmConfig, widgetId: st
         where.category = { contains: category, mode: 'insensitive' };
       }
 
-      const services = await db.service.findMany({
+      const localServices = await db.service.findMany({
         where,
-        orderBy: { rate: 'asc' }, // cheapest first
+        orderBy: { rate: 'asc' },
         take: limit,
         select: {
           name: true, platform: true, category: true,
@@ -186,15 +196,27 @@ async function executeTool(name: string, args: any, cfg: SmmConfig, widgetId: st
           avgTime: true, quality: true, description: true, externalId: true,
         },
       });
-      result = {
-        ok: true,
-        count: services.length,
-        services: services.map(s => ({
-          ...s,
-          ratePer1000: s.rate,
-          priceNote: `$${s.rate} per 1000 ${s.category.toLowerCase()}`,
-        })),
-      };
+
+      if (localServices.length > 0) {
+        result = {
+          ok: true,
+          count: localServices.length,
+          source: 'local',
+          services: localServices.map(s => ({
+            ...s,
+            ratePer1000: s.rate,
+            priceNote: `$${s.rate} per 1000 ${s.category.toLowerCase()}`,
+          })),
+          note: live.ok === false ? `Live API failed (${live.error}); showing local catalog.` : undefined,
+        };
+      } else {
+        result = {
+          ok: false,
+          error: live.ok === false
+            ? `SMM panel API error: ${live.error}. Also no local services configured.`
+            : 'No services found matching the filter. Try a broader query.',
+        };
+      }
       break;
     }
     case 'list_orders':
@@ -328,14 +350,71 @@ export async function runChat(opts: ChatOptions): Promise<ChatResult> {
   let finalReply = '';
 
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-    const response = await client.chat.completions.create({
-      model: GROQ_MODEL,
-      messages,
-      tools: TOOLS as any,
-      tool_choice: 'auto',
-      temperature: 0.6,
-      max_tokens: 1024,
-    });
+    let response: any;
+    try {
+      response = await client.chat.completions.create({
+        model: GROQ_MODEL,
+        messages,
+        tools: TOOLS as any,
+        tool_choice: 'auto',
+        temperature: 0.6,
+        max_tokens: 1024,
+      });
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      // Groq sometimes returns "tool_use_failed" with a <function=...> legacy
+      // format in `failed_generation`. Try to parse it and execute the tool.
+      const failedMatch = errMsg.match(/<function=(\w+)\s*(\{[^>]*\})>/);
+      if (failedMatch) {
+        const fnName = failedMatch[1];
+        let fnArgs: any = {};
+        try { fnArgs = JSON.parse(failedMatch[2]); } catch {}
+
+        // Coerce numeric strings to integers
+        for (const k of ['limit', 'offset']) {
+          if (fnArgs[k] !== undefined && typeof fnArgs[k] === 'string') {
+            const n = parseInt(fnArgs[k], 10);
+            if (!Number.isNaN(n)) fnArgs[k] = n;
+          }
+        }
+
+        if (steps.length > 0) steps[steps.length - 1].status = 'done';
+        pushStep(`⚙️ Calling ${fnName}...`);
+        const toolResult = await executeTool(fnName, fnArgs, opts.cfg, opts.widgetId);
+        steps[steps.length - 1].status = 'done';
+
+        messages.push({
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: `legacy_${Date.now()}`, type: 'function', function: { name: fnName, arguments: JSON.stringify(fnArgs) } }],
+        });
+        messages.push({
+          role: 'tool',
+          content: toolResult,
+          tool_call_id: `legacy_${Date.now()}`,
+        });
+        continue; // retry the loop with the tool result fed back
+      }
+
+      // If not a legacy format error, retry once without tools (the model
+      // can still give a text answer even if tool calling failed)
+      if (iter === 0) {
+        try {
+          const fallbackResp = await client.chat.completions.create({
+            model: GROQ_MODEL,
+            messages,
+            temperature: 0.6,
+            max_tokens: 800,
+          });
+          const fallbackMsg = fallbackResp.choices?.[0]?.message as any;
+          if (fallbackMsg?.content) {
+            finalReply = fallbackMsg.content;
+            break;
+          }
+        } catch {}
+      }
+      throw err;
+    }
 
     const msg = response.choices?.[0]?.message as any;
     if (!msg) {

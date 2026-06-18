@@ -4,7 +4,7 @@
   "buildCommand": "bun run vercel-build",
   "installCommand": "bun install",
   "devCommand": "bun run dev",
-  "regions": ["sin1"],
+  "regions": ["sin1", "bom1", "fra1", "iad1"],
   "functions": {
     "src/app/api/chatbot/message/route.ts": {
       "maxDuration": 60

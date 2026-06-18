@@ -23,7 +23,7 @@ model Widget {
   buttonShape     String   @default("circle")
   buttonIcon      String   @default("chat")
   widgetIconUrl   String?
-  greetingMessage String   @default("👋 Welcome to Mothersmm AI Assistant!\n\nI recommend the best services using performance data, pricing, and insights from SMMGEN's order history.\n\n**What I can do:**\n• Best services for your needs\n• Service suggestion & Recent Order history check\n• Price & quality suggestions\n• General questions — in any language\n\nJust type your question, and I'll assist you instantly ✨") @db.Text
+  greetingMessage String   @default("👋 Welcome to SMMGEN AI Assistant!\n\nI recommend the best services using performance data, pricing, and insights from SMMGEN's order history.\n\n**What I can do:**\n• Best services for your needs\n• Service suggestion & Recent Order history check\n• Price & quality suggestions\n• General questions — in any language\n\nJust type your question, and I'll assist you instantly ✨") @db.Text
   greetingSuggestions String @default("[\"Hello\",\"Best TikTok Likes\",\"What is the best Facebook followers?\",\"Any other options?\"]") @db.Text
   greetingIntervalHours Int @default(24)
   smmApiBase       String  @default("https://mothersmm.com/adminapi/v2")

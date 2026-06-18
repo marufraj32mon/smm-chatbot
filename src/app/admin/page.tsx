@@ -506,6 +506,7 @@ function ServicesTab({ publicKey }: { publicKey: string }) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<ServiceRow | null>(null);
+  const [importing, setImporting] = useState(false);
   const [form, setForm] = useState({
     name: '', platform: 'Facebook', category: 'Followers',
     rate: '', currency: 'USD', minOrder: '10', maxOrder: '50000',
@@ -528,6 +529,22 @@ function ServicesTab({ publicKey }: { publicKey: string }) {
   }, [publicKey]);
 
   useEffect(() => { load(); }, [load]);
+
+  const importFromPanel = async () => {
+    if (!confirm('Import all services from your SMM panel? This will fetch live data from /api/v2?action=services and update your local catalog. Existing services will be updated.')) return;
+    setImporting(true);
+    try {
+      const res = await fetch('/api/admin/import-services?key=' + publicKey, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Import failed');
+      toast.success(`Imported ${data.inserted} new, updated ${data.updated} existing services from panel.`);
+      load();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const startAdd = () => {
     setEditing(null);
@@ -597,17 +614,23 @@ function ServicesTab({ publicKey }: { publicKey: string }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center justify-between">
+        <CardTitle className="flex items-center justify-between flex-wrap gap-2">
           <span className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-violet-600" /> Services & Pricing Catalog
           </span>
-          <Button size="sm" onClick={startAdd} className="bg-violet-600 hover:bg-violet-700 text-white">
-            ✚ Add service
-          </Button>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={importFromPanel} disabled={importing}
+              className="border-violet-200 text-violet-700 hover:bg-violet-50">
+              {importing ? <><RefreshCw className="w-3 h-3 mr-1 animate-spin" /> Importing…</> : <>⬇ Import from SMM Panel</>}
+            </Button>
+            <Button size="sm" onClick={startAdd} className="bg-violet-600 hover:bg-violet-700 text-white">
+              ✚ Add service
+            </Button>
+          </div>
         </CardTitle>
         <CardDescription>
-          The chatbot uses this catalog to answer pricing questions (e.g. "Facebook followers cheapest price?").
-          Add your real panel services here. Cheapest first when bot recommends.
+          The chatbot calls your SMM panel API (<code>/api/v2?action=services</code>) live for pricing questions.
+          Use "Import from SMM Panel" to also cache them locally as a fallback.
         </CardDescription>
       </CardHeader>
       <CardContent>
