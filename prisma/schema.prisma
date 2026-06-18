@@ -23,7 +23,7 @@ model Widget {
   buttonShape     String   @default("circle")
   buttonIcon      String   @default("chat")
   widgetIconUrl   String?
-  greetingMessage String   @default("👋 Welcome to SMMGEN AI Assistant!\n\nI recommend the best services using performance data, pricing, and insights from SMMGEN's order history.\n\n**What I can do:**\n• Best services for your needs\n• Service suggestion & Recent Order history check\n• Price & quality suggestions\n• General questions — in any language\n\nJust type your question, and I'll assist you instantly ✨") @db.Text
+  greetingMessage String   @default("👋 Welcome to Mothersmm AI Assistant!\n\nI recommend the best services using performance data, pricing, and insights from SMMGEN's order history.\n\n**What I can do:**\n• Best services for your needs\n• Service suggestion & Recent Order history check\n• Price & quality suggestions\n• General questions — in any language\n\nJust type your question, and I'll assist you instantly ✨") @db.Text
   greetingSuggestions String @default("[\"Hello\",\"Best TikTok Likes\",\"What is the best Facebook followers?\",\"Any other options?\"]") @db.Text
   greetingIntervalHours Int @default(24)
   smmApiBase       String  @default("https://mothersmm.com/adminapi/v2")
@@ -34,6 +34,7 @@ model Widget {
   sessions         Session[]
   messages         Message[]
   feedbacks        Feedback[]
+  services         Service[]
 }
 
 // ─── Chat Sessions ────────────────────────────────────────────────────
@@ -69,7 +70,32 @@ model Message {
   @@index([widgetId])
 }
 
-// ─── Feedback (thumbs up/down on bot replies) ─────────────────────────
+// ─── Services (catalog the bot uses to answer price questions) ────────
+// MothersSMM Admin API doesn't expose a services endpoint, so admin
+// maintains this local catalog. Bot queries it via list_services tool.
+model Service {
+  id          String   @id @default(cuid())
+  widgetId    String
+  widget      Widget   @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+  externalId  String?                          // service_id on the SMM panel (optional)
+  name        String                           // e.g. "Facebook Followers [Real] [Max 50K]"
+  platform    String                           // e.g. "Facebook", "Instagram", "TikTok", "YouTube"
+  category    String                           // e.g. "Followers", "Likes", "Views", "Comments"
+  rate        Float                            // price per 1000 units, in panel currency
+  currency    String   @default("USD")
+  minOrder    Int      @default(10)
+  maxOrder    Int      @default(100000)
+  avgTime     String   @default("")            // e.g. "0-2 hours"
+  description String   @default("") @db.Text
+  quality     String   @default("standard")    // standard | premium | vip
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([widgetId])
+  @@index([platform])
+  @@index([category])
+}
 model Feedback {
   id            String   @id @default(cuid())
   widgetId      String
