@@ -31,7 +31,7 @@ export function getGemini() {
   if (!cachedClient) {
     cachedClient = new GoogleGenerativeAI(apiKey);
     cachedModel = cachedClient.getGenerativeModel({
-      model: process.env.GEMINI_MODEL || 'gemini-1.5-flash',
+      model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
       generationConfig: {
         temperature: 0.6,
         maxOutputTokens: 1024,
