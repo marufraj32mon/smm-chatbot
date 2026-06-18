@@ -1,0 +1,84 @@
+// SMM AI Chatbot — Prisma schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Widget Configuration ────────────────────────────────────────────
+// One row per panel/partner. publicKey is what they embed in <script data-key="...">
+model Widget {
+  id              String   @id @default(cuid())
+  publicKey       String   @unique
+  secretKey       String                       // for admin API access
+  panelName       String   @default("SMMGEN")
+  panelDomain     String   @default("https://smmgen.example.com")
+  botName         String   @default("SMMGEN AI Assistant")
+  widgetColor     String   @default("#6c5ce7")
+  buttonShape     String   @default("circle")
+  buttonIcon      String   @default("chat")
+  widgetIconUrl   String?
+  greetingMessage String   @default("👋 Welcome to SMMGEN AI Assistant!\n\nI recommend the best services using performance data, pricing, and insights from SMMGEN's order history.\n\n**What I can do:**\n• Best services for your needs\n• Service suggestion & Recent Order history check\n• Price & quality suggestions\n• General questions — in any language\n\nJust type your question, and I'll assist you instantly ✨") @db.Text
+  greetingSuggestions String @default("[\"Hello\",\"Best TikTok Likes\",\"What is the best Facebook followers?\",\"Any other options?\"]") @db.Text
+  greetingIntervalHours Int @default(24)
+  smmApiBase       String  @default("https://mothersmm.com/adminapi/v2")
+  smmApiKey        String  @default("")                              // Admin API key for MothersSMM
+  systemPromptExtra String  @default("") @db.Text
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  sessions         Session[]
+  messages         Message[]
+  feedbacks        Feedback[]
+}
+
+// ─── Chat Sessions ────────────────────────────────────────────────────
+model Session {
+  id            String   @id @default(cuid())
+  widgetId      String
+  widget        Widget   @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+  sessionToken  String   @unique
+  mode          String   @default("bot")  // bot | pending | human
+  userAgent     String?  @db.VarChar(250)
+  ip            String?  @db.VarChar(50)
+  lang          String   @default("en")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  messages      Message[]
+}
+
+// ─── Chat Messages ────────────────────────────────────────────────────
+model Message {
+  id            String   @id @default(cuid())
+  widgetId      String
+  widget        Widget   @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+  sessionId     String
+  session       Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role          String   // user | bot | agent | system
+  content       String   @db.Text
+  agentName     String?
+  isInternal    Boolean  @default(false)
+  suggestions   String?  // JSON array of {text} for follow-ups
+  createdAt     DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([widgetId])
+}
+
+// ─── Feedback (thumbs up/down on bot replies) ─────────────────────────
+model Feedback {
+  id            String   @id @default(cuid())
+  widgetId      String
+  widget        Widget   @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+  sessionId     String
+  messageId     String
+  rating        String   // up | down
+  comment       String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  @@index([widgetId])
+}
