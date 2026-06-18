@@ -80,12 +80,12 @@ export async function POST(req: NextRequest) {
     orderBy: { createdAt: 'asc' },
     take:   24,
   });
-  // Build history in Gemini format (roles: 'user' | 'model')
-  const history: { role: 'user' | 'model'; content: string }[] = recent
+  // Build history in OpenAI/Groq format (roles: 'user' | 'assistant')
+  const history: { role: 'user' | 'assistant'; content: string }[] = recent
     .filter(m => m.role !== 'system')
     .slice(-12)
     .map(m => ({
-      role:    (m.role === 'user' ? 'user' : 'model') as 'user' | 'model',
+      role:    (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
       content: m.content,
     }));
   // Drop the just-saved user message — runChat adds it itself
@@ -138,10 +138,15 @@ export async function POST(req: NextRequest) {
         const errMsg = err?.message || 'Internal error';
 
         // Friendly error for missing LLM credentials
-        if (errMsg.includes('GEMINI_API_KEY') || errMsg.includes('API key not valid')) {
+        if (errMsg.includes('GROQ_API_KEY')) {
           send({
             type: 'error',
-            message: 'AI service is not configured. Please set GEMINI_API_KEY environment variable in Vercel. Get a free key at https://aistudio.google.com/apikey',
+            message: 'AI service is not configured. Please set GROQ_API_KEY environment variable in Vercel. Get a free key at https://console.groq.com/keys',
+          });
+        } else if (errMsg.includes('GEMINI_API_KEY')) {
+          send({
+            type: 'error',
+            message: 'AI service is not configured. Please set GROQ_API_KEY environment variable in Vercel. Get a free key at https://console.groq.com/keys',
           });
         } else {
           send({ type: 'error', message: errMsg });
