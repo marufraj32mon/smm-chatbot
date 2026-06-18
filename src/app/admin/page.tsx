@@ -184,12 +184,15 @@ export default function AdminPage() {
 
       <main className="max-w-6xl mx-auto px-6 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="bg-white border border-slate-200">
+          <TabsList className="bg-white border border-slate-200 flex flex-wrap h-auto">
             <TabsTrigger value="general" className="data-[state=active]:bg-violet-50 data-[state=active]:text-violet-700">
               <Bot className="w-4 h-4 mr-1.5" /> General
             </TabsTrigger>
             <TabsTrigger value="greeting" className="data-[state=active]:bg-violet-50 data-[state=active]:text-violet-700">
               <MessageSquare className="w-4 h-4 mr-1.5" /> Greeting & Suggestions
+            </TabsTrigger>
+            <TabsTrigger value="services" className="data-[state=active]:bg-violet-50 data-[state=active]:text-violet-700">
+              <Sparkles className="w-4 h-4 mr-1.5" /> Services & Pricing
             </TabsTrigger>
             <TabsTrigger value="api" className="data-[state=active]:bg-violet-50 data-[state=active]:text-violet-700">
               <Key className="w-4 h-4 mr-1.5" /> SMM API
@@ -325,6 +328,11 @@ export default function AdminPage() {
           </TabsContent>
 
           {/* ── SMM API ─────────────────────────────────────────────────── */}
+          {/* ── Services & Pricing ───────────────────────────────────── */}
+          <TabsContent value="services">
+            <ServicesTab publicKey={DEFAULT_PUBLIC_KEY} />
+          </TabsContent>
+
           <TabsContent value="api">
             <Card>
               <CardHeader>
@@ -473,5 +481,271 @@ export default function AdminPage() {
         </Tabs>
       </main>
     </div>
+  );
+}
+
+// ─── Services Tab Component ─────────────────────────────────────────────
+interface ServiceRow {
+  id: string;
+  externalId: string | null;
+  name: string;
+  platform: string;
+  category: string;
+  rate: number;
+  currency: string;
+  minOrder: number;
+  maxOrder: number;
+  avgTime: string;
+  description: string;
+  quality: string;
+  isActive: boolean;
+}
+
+function ServicesTab({ publicKey }: { publicKey: string }) {
+  const [services, setServices] = useState<ServiceRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<ServiceRow | null>(null);
+  const [form, setForm] = useState({
+    name: '', platform: 'Facebook', category: 'Followers',
+    rate: '', currency: 'USD', minOrder: '10', maxOrder: '50000',
+    avgTime: '', description: '', quality: 'standard',
+    externalId: '', isActive: true,
+  });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/admin/services?key=' + publicKey);
+      if (!res.ok) throw new Error('Failed to load');
+      const data = await res.json();
+      setServices(data.services || []);
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [publicKey]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const startAdd = () => {
+    setEditing(null);
+    setForm({
+      name: '', platform: 'Facebook', category: 'Followers',
+      rate: '', currency: 'USD', minOrder: '10', maxOrder: '50000',
+      avgTime: '', description: '', quality: 'standard',
+      externalId: '', isActive: true,
+    });
+    setShowForm(true);
+  };
+
+  const startEdit = (s: ServiceRow) => {
+    setEditing(s);
+    setForm({
+      name: s.name, platform: s.platform, category: s.category,
+      rate: String(s.rate), currency: s.currency,
+      minOrder: String(s.minOrder), maxOrder: String(s.maxOrder),
+      avgTime: s.avgTime, description: s.description, quality: s.quality,
+      externalId: s.externalId || '', isActive: s.isActive,
+    });
+    setShowForm(true);
+  };
+
+  const saveService = async () => {
+    if (!form.name || !form.rate) {
+      toast.error('Name and Rate are required');
+      return;
+    }
+    try {
+      const url = editing
+        ? '/api/admin/services/' + editing.id + '?key=' + publicKey
+        : '/api/admin/services?key=' + publicKey;
+      const res = await fetch(url, {
+        method: editing ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      if (!res.ok) {
+        const e = await res.json();
+        throw new Error(e.error || 'Save failed');
+      }
+      toast.success(editing ? 'Service updated' : 'Service added');
+      setShowForm(false);
+      setEditing(null);
+      load();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
+  const remove = async (s: ServiceRow) => {
+    if (!confirm(`Delete "${s.name}"?`)) return;
+    try {
+      await fetch('/api/admin/services/' + s.id + '?key=' + publicKey, { method: 'DELETE' });
+      toast.success('Service deleted');
+      load();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
+  if (loading) {
+    return <div className="text-center py-12 text-slate-500">Loading services…</div>;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-violet-600" /> Services & Pricing Catalog
+          </span>
+          <Button size="sm" onClick={startAdd} className="bg-violet-600 hover:bg-violet-700 text-white">
+            ✚ Add service
+          </Button>
+        </CardTitle>
+        <CardDescription>
+          The chatbot uses this catalog to answer pricing questions (e.g. "Facebook followers cheapest price?").
+          Add your real panel services here. Cheapest first when bot recommends.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {showForm && (
+          <div className="mb-6 p-5 bg-violet-50/50 border border-violet-200 rounded-lg space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-semibold text-violet-900">
+                {editing ? 'Edit service' : 'Add new service'}
+              </h4>
+              <Button size="sm" variant="outline" onClick={() => setShowForm(false)}>✕ Cancel</Button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <Label>Service name *</Label>
+                <Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
+                  placeholder="e.g. Facebook Followers [Real] [Max 50K]" />
+              </div>
+              <div>
+                <Label>Platform *</Label>
+                <select className="w-full h-10 px-3 rounded-md border border-slate-200 bg-white"
+                  value={form.platform} onChange={e => setForm({ ...form, platform: e.target.value })}>
+                  {['Facebook', 'Instagram', 'TikTok', 'YouTube', 'Twitter', 'Telegram', 'LinkedIn', 'Spotify', 'Other'].map(p =>
+                    <option key={p} value={p}>{p}</option>
+                  )}
+                </select>
+              </div>
+              <div>
+                <Label>Category *</Label>
+                <select className="w-full h-10 px-3 rounded-md border border-slate-200 bg-white"
+                  value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+                  {['Followers', 'Likes', 'Views', 'Comments', 'Subscribers', 'WatchTime', 'Shares', 'Saves', 'Other'].map(c =>
+                    <option key={c} value={c}>{c}</option>
+                  )}
+                </select>
+              </div>
+              <div>
+                <Label>Rate per 1000 *</Label>
+                <Input type="number" step="0.01" value={form.rate}
+                  onChange={e => setForm({ ...form, rate: e.target.value })}
+                  placeholder="e.g. 1.20" />
+              </div>
+              <div>
+                <Label>Min order</Label>
+                <Input type="number" value={form.minOrder}
+                  onChange={e => setForm({ ...form, minOrder: e.target.value })} />
+              </div>
+              <div>
+                <Label>Max order</Label>
+                <Input type="number" value={form.maxOrder}
+                  onChange={e => setForm({ ...form, maxOrder: e.target.value })} />
+              </div>
+              <div>
+                <Label>Avg delivery time</Label>
+                <Input value={form.avgTime} onChange={e => setForm({ ...form, avgTime: e.target.value })}
+                  placeholder="e.g. 0-2 hours" />
+              </div>
+              <div>
+                <Label>Quality</Label>
+                <select className="w-full h-10 px-3 rounded-md border border-slate-200 bg-white"
+                  value={form.quality} onChange={e => setForm({ ...form, quality: e.target.value })}>
+                  <option value="standard">Standard</option>
+                  <option value="premium">Premium</option>
+                  <option value="vip">VIP</option>
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <Label>Description (shown to bot for context)</Label>
+                <Textarea rows={2} value={form.description}
+                  onChange={e => setForm({ ...form, description: e.target.value })}
+                  placeholder="e.g. Real-looking followers, lifetime guarantee, no drop" />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={saveService} className="bg-violet-600 hover:bg-violet-700 text-white">
+                {editing ? 'Update service' : 'Add service'}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {services.length === 0 ? (
+          <div className="text-center py-12 text-slate-500">
+            No services yet. Click "Add service" to create your first one — the bot will use this catalog to answer pricing questions.
+          </div>
+        ) : (
+          <div className="border border-slate-200 rounded-lg overflow-hidden overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>
+                  <th className="text-left py-2 px-3 font-medium">Service</th>
+                  <th className="text-left py-2 px-3 font-medium">Platform</th>
+                  <th className="text-left py-2 px-3 font-medium">Category</th>
+                  <th className="text-left py-2 px-3 font-medium">Rate/1K</th>
+                  <th className="text-left py-2 px-3 font-medium">Quality</th>
+                  <th className="text-left py-2 px-3 font-medium">Delivery</th>
+                  <th className="text-right py-2 px-3 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {services.map(s => (
+                  <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50">
+                    <td className="py-2 px-3">
+                      <div className="font-medium text-slate-800">{s.name}</div>
+                      {s.description && <div className="text-xs text-slate-500 mt-0.5">{s.description}</div>}
+                    </td>
+                    <td className="py-2 px-3">{s.platform}</td>
+                    <td className="py-2 px-3">{s.category}</td>
+                    <td className="py-2 px-3 font-mono font-bold text-violet-700">${s.rate}</td>
+                    <td className="py-2 px-3">
+                      <Badge variant="outline" className={
+                        s.quality === 'premium' ? 'border-amber-200 text-amber-700 bg-amber-50' :
+                        s.quality === 'vip' ? 'border-rose-200 text-rose-700 bg-rose-50' :
+                        'border-slate-200 text-slate-600 bg-slate-50'
+                      }>{s.quality}</Badge>
+                    </td>
+                    <td className="py-2 px-3 text-slate-500 text-xs">{s.avgTime || '—'}</td>
+                    <td className="py-2 px-3 text-right">
+                      <Button size="sm" variant="ghost" onClick={() => startEdit(s)} className="text-violet-700 h-8 px-2">
+                        Edit
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => remove(s)} className="text-red-600 h-8 px-2">
+                        Delete
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="mt-4 bg-violet-50 border border-violet-100 rounded-lg p-4 text-sm text-violet-900">
+          <Sparkles className="w-4 h-4 inline-block mr-1" />
+          <strong>How the bot uses this:</strong> When a user asks about pricing or service recommendations,
+          the bot calls <code>list_services</code> tool which queries this catalog sorted by rate (cheapest first).
+          The bot then presents the top results with real prices from your panel.
+        </div>
+      </CardContent>
+    </Card>
   );
 }
